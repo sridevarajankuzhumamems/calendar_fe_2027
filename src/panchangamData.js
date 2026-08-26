@@ -924,7 +924,7 @@ function assignSpecialImages() {
                 // Also add Uriyadi Urchavam for next day
                 const gokulaDate = new Date(2026, parseInt(month), parseInt(day));
                 const uriyadiDate = new Date(gokulaDate);
-                uriyadiDate.setDate(uriyadiDate.getDate() + 2);
+                uriyadiDate.setDate(uriyadiDate.getDate() + 1);
 
                 const um = uriyadiDate.getMonth();
                 const ud = uriyadiDate.getDate();
