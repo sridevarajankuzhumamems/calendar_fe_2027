@@ -48,7 +48,6 @@ const MonthCalendar = ({ onShowCredits, onShowEssentials, currentMonth, setCurre
 
     const [currentYear, setCurrentYear] = useState(2026);
     const [apiDataCache, setApiDataCache] = useState({});
-    const [loadingMonth, setLoadingMonth] = useState(false);
 
     const [selectedDate, setSelectedDate] = useState(null);
     const [currentImageIndex, setCurrentImageIndex] = useState(0); // For image carousel
@@ -62,11 +61,10 @@ const MonthCalendar = ({ onShowCredits, onShowEssentials, currentMonth, setCurre
     const API_BASE_URL = process.env.REACT_APP_CALENDAR_API || 'http://localhost:5001/api/calendar';
 
     // Fetch month from API for 2027+ with memory cache & prefetch
-    React.useEffect(() => {
+    useEffect(() => {
         if (currentYear >= 2027) {
             const key = `${currentYear}-${currentMonth}`;
             if (!apiDataCache[key]) {
-                setLoadingMonth(true);
                 fetch(`${API_BASE_URL}/${currentYear}/${currentMonth}`)
                     .then(res => res.json())
                     .then(data => {
@@ -74,8 +72,7 @@ const MonthCalendar = ({ onShowCredits, onShowEssentials, currentMonth, setCurre
                             setApiDataCache(prev => ({ ...prev, [key]: data.days }));
                         }
                     })
-                    .catch(err => console.error("Error loading calendar data from backend:", err))
-                    .finally(() => setLoadingMonth(false));
+                    .catch(err => console.error("Error loading calendar data from backend:", err));
             }
 
             // Pre-fetch next month in background for instant loading
@@ -253,7 +250,7 @@ const MonthCalendar = ({ onShowCredits, onShowEssentials, currentMonth, setCurre
     };
 
     // Auto-slide for images when modal is open and has multiple images
-    React.useEffect(() => {
+    useEffect(() => {
         const panchangam = selectedDate?.panchangam;
         if (panchangam?.imageArray || panchangam?.secondaryImage) {
             const imageCount = panchangam.imageArray ? panchangam.imageArray.length : 2;
