@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { getTamilDate, getTamilMonthsInGregorianMonth, getPanchangamData, DAY_TYPES } from "./panchangamData";
 import { getRahukalamData } from "./rahukalam";
 
@@ -46,7 +46,10 @@ const MonthCalendar = ({ onShowCredits, onShowEssentials, currentMonth, setCurre
     const todayMonth = today.getMonth();
     const todayDay = today.getDate();
 
-    const [currentYear] = useState(2026);
+    const [currentYear, setCurrentYear] = useState(2026);
+    const [apiDataCache, setApiDataCache] = useState({});
+    const [loadingMonth, setLoadingMonth] = useState(false);
+
     const [selectedDate, setSelectedDate] = useState(null);
     const [currentImageIndex, setCurrentImageIndex] = useState(0); // For image carousel
     // State to store the center coordinates of the clicked date cell
@@ -54,6 +57,43 @@ const MonthCalendar = ({ onShowCredits, onShowEssentials, currentMonth, setCurre
     const [direction, setDirection] = useState('forward');
 
     const monthName = MONTH_NAMES[currentMonth];
+
+    // API URL for 2027 and beyond
+    const API_BASE_URL = process.env.REACT_APP_CALENDAR_API || 'http://localhost:5001/api/calendar';
+
+    // Fetch month from API for 2027+ with memory cache & prefetch
+    React.useEffect(() => {
+        if (currentYear >= 2027) {
+            const key = `${currentYear}-${currentMonth}`;
+            if (!apiDataCache[key]) {
+                setLoadingMonth(true);
+                fetch(`${API_BASE_URL}/${currentYear}/${currentMonth}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data && data.days) {
+                            setApiDataCache(prev => ({ ...prev, [key]: data.days }));
+                        }
+                    })
+                    .catch(err => console.error("Error loading calendar data from backend:", err))
+                    .finally(() => setLoadingMonth(false));
+            }
+
+            // Pre-fetch next month in background for instant loading
+            const nextMonth = currentMonth === 11 ? 0 : currentMonth + 1;
+            const nextYear = currentMonth === 11 ? currentYear + 1 : currentYear;
+            const nextKey = `${nextYear}-${nextMonth}`;
+            if (!apiDataCache[nextKey]) {
+                fetch(`${API_BASE_URL}/${nextYear}/${nextMonth}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data && data.days) {
+                            setApiDataCache(prev => ({ ...prev, [nextKey]: data.days }));
+                        }
+                    })
+                    .catch(() => {});
+            }
+        }
+    }, [currentYear, currentMonth, apiDataCache, API_BASE_URL]);
 
     // Get number of days in current month
     const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
@@ -66,27 +106,120 @@ const MonthCalendar = ({ onShowCredits, onShowEssentials, currentMonth, setCurre
 
     // Generate list of days with Tamil dates and Panchangam data
     const daysWithData = useMemo(() => {
+        // For 2026, keep existing hardcoded data
+        if (currentYear === 2026) {
+            return Array.from({ length: daysInMonth }, (_, i) => {
+                const day = i + 1;
+                const tamilDate = getTamilDate(currentYear, currentMonth, day);
+                const panchangam = getPanchangamData(currentYear, currentMonth, day);
+                const rahukalam = getRahukalamData(currentYear, currentMonth, day);
+                const dayOfWeek = new Date(currentYear, currentMonth, day).getDay();
+                return { day, tamilDate, panchangam, rahukalam, isSunday: dayOfWeek === 0 };
+            });
+        }
+
+        // For 2027 onwards, use API data (or skeleton if loading)
+        const cacheKey = `${currentYear}-${currentMonth}`;
+        const rawDays = apiDataCache[cacheKey];
+
         return Array.from({ length: daysInMonth }, (_, i) => {
             const day = i + 1;
-            const tamilDate = getTamilDate(currentYear, currentMonth, day);
-            const panchangam = getPanchangamData(currentYear, currentMonth, day);
-            const rahukalam = getRahukalamData(currentYear, currentMonth, day);
             const dayOfWeek = new Date(currentYear, currentMonth, day).getDay();
-            return { day, tamilDate, panchangam, rahukalam, isSunday: dayOfWeek === 0 };
+            const fallbackRahukalam = getRahukalamData(currentYear, currentMonth, day);
+            const apiDay = rawDays ? rawDays.find(d => d.day === day) : null;
+
+            if (apiDay) {
+                const tithiShort = apiDay.tithiList && apiDay.tithiList[0]?.name
+                    ? apiDay.tithiList.map(t => t.name).filter(Boolean).join(', ')
+                    : '';
+                const tithiFull = apiDay.tithiList && apiDay.tithiList[0]?.name
+                    ? apiDay.tithiList.map(t => t.name + (t.startTime || t.endTime ? ` (${[t.startTime, t.endTime].filter(Boolean).join(' - ')})` : '')).filter(Boolean).join(', ')
+                    : '';
+                const nakshatraShort = apiDay.nakshatraList && apiDay.nakshatraList[0]?.name
+                    ? apiDay.nakshatraList.map(n => n.name).filter(Boolean).join(', ')
+                    : '';
+                const nakshatraFull = apiDay.nakshatraList && apiDay.nakshatraList[0]?.name
+                    ? apiDay.nakshatraList.map(n => n.name + (n.startTime || n.endTime ? ` (${[n.startTime, n.endTime].filter(Boolean).join(' - ')})` : '')).filter(Boolean).join(', ')
+                    : '';
+
+                // Support dual images: leftImage and gridImage
+                const finalLeftImage = apiDay.leftImage || null;
+                const finalGridImage = apiDay.gridImage || (!apiDay.leftImage ? (apiDay.image || null) : null);
+                const finalImageArray = (apiDay.imageArray && apiDay.imageArray.length > 0)
+                    ? apiDay.imageArray
+                    : [finalLeftImage, finalGridImage].filter(Boolean);
+
+                return {
+                    day,
+                    tamilDate: {
+                        day: apiDay.tamilDate?.day || day,
+                        month: apiDay.tamilDate?.month || '',
+                        monthEn: apiDay.tamilDate?.month || ''
+                    },
+                    panchangam: {
+                        tamil_date: apiDay.tamilDate?.month ? `${apiDay.tamilDate.month} ${apiDay.tamilDate.day}` : '',
+                        tithi: tithiFull,
+                        tithiShort: tithiShort,
+                        nakshatra: nakshatraFull,
+                        nakshatraShort: nakshatraShort,
+                        events: apiDay.events || [],
+                        festival: apiDay.events && apiDay.events.length > 0 ? apiDay.events.join(', ') : null,
+                        dayType: apiDay.dayType || DAY_TYPES.REGULAR,
+                        isGovtHoliday: Boolean(apiDay.isGovtHoliday),
+                        image: finalLeftImage || finalGridImage || null,
+                        secondaryImage: (finalLeftImage && finalGridImage) ? finalGridImage : null,
+                        imageArray: finalImageArray.length > 0 ? finalImageArray : null,
+                        leftImage: finalLeftImage,
+                        gridImage: finalGridImage
+                    },
+                    rahukalam: apiDay.rahukalam || fallbackRahukalam,
+                    isSunday: dayOfWeek === 0
+                };
+            }
+
+            return {
+                day,
+                tamilDate: { day, month: '', monthEn: '' },
+                panchangam: {
+                    tamil_date: '---',
+                    tithi: '',
+                    tithiShort: '',
+                    nakshatra: '',
+                    nakshatraShort: '',
+                    events: [],
+                    festival: null,
+                    dayType: DAY_TYPES.REGULAR,
+                    isGovtHoliday: false
+                },
+                rahukalam: fallbackRahukalam,
+                isSunday: dayOfWeek === 0
+            };
         });
-    }, [daysInMonth, currentYear, currentMonth]);
+    }, [daysInMonth, currentYear, currentMonth, apiDataCache]);
 
     // Get Tamil months that span this Gregorian month
     const tamilMonths = useMemo(() => {
-        return getTamilMonthsInGregorianMonth(currentYear, currentMonth);
-    }, [currentYear, currentMonth]);
+        if (currentYear === 2026) {
+            return getTamilMonthsInGregorianMonth(currentYear, currentMonth);
+        }
+        const unique = [];
+        daysWithData.forEach(d => {
+            if (d.tamilDate?.month && !unique.some(u => u.name === d.tamilDate.month)) {
+                unique.push({ name: d.tamilDate.month });
+            }
+        });
+        return unique;
+    }, [currentYear, currentMonth, daysWithData]);
 
-    // Navigation handlers - restricted to 2026 only
-    // Navigation handlers - restricted to 2026 only
+    // Navigation handlers - seamless transition beyond December 2026
     const goToPreviousMonth = () => {
         if (currentMonth > 0) {
             setDirection('backward');
             setCurrentMonth(currentMonth - 1);
+        } else if (currentYear > 2026) {
+            setDirection('backward');
+            setCurrentYear(currentYear - 1);
+            setCurrentMonth(11); // December of previous year
         }
         setSelectedDate(null);
     };
@@ -95,6 +228,11 @@ const MonthCalendar = ({ onShowCredits, onShowEssentials, currentMonth, setCurre
         if (currentMonth < 11) {
             setDirection('forward');
             setCurrentMonth(currentMonth + 1);
+        } else {
+            // Smoothly move from December 2026 to January 2027!
+            setDirection('forward');
+            setCurrentYear(currentYear + 1);
+            setCurrentMonth(0);
         }
         setSelectedDate(null);
     };
@@ -227,8 +365,8 @@ const MonthCalendar = ({ onShowCredits, onShowEssentials, currentMonth, setCurre
                         <div className="flex justify-between items-center mb-4 bg-white/20 p-2 rounded-xl shadow-inner border border-white/10">
                             <button
                                 onClick={goToPreviousMonth}
-                                disabled={currentMonth === 0}
-                                className={`w-8 h-8 flex items-center justify-center rounded-full shadow transition-all duration-200 text-lg font-bold ${currentMonth === 0 ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-white/90 hover:bg-white text-black hover:scale-110 active:scale-95'}`}
+                                disabled={currentYear === 2026 && currentMonth === 0}
+                                className={`w-8 h-8 flex items-center justify-center rounded-full shadow transition-all duration-200 text-lg font-bold ${(currentYear === 2026 && currentMonth === 0) ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-white/90 hover:bg-white text-black hover:scale-110 active:scale-95'}`}
                             >
                                 ◀
                             </button>
@@ -244,8 +382,7 @@ const MonthCalendar = ({ onShowCredits, onShowEssentials, currentMonth, setCurre
                             </div>
                             <button
                                 onClick={goToNextMonth}
-                                disabled={currentMonth === 11}
-                                className={`w-8 h-8 flex items-center justify-center rounded-full shadow transition-all duration-200 text-lg font-bold ${currentMonth === 11 ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-white/90 hover:bg-white text-black hover:scale-110 active:scale-95'}`}
+                                className="w-8 h-8 flex items-center justify-center rounded-full shadow transition-all duration-200 text-lg font-bold bg-white/90 hover:bg-white text-black hover:scale-110 active:scale-95"
                             >
                                 ▶
                             </button>
@@ -279,7 +416,7 @@ const MonthCalendar = ({ onShowCredits, onShowEssentials, currentMonth, setCurre
                                 {daysWithData.map((dayData, i) => {
                                     const { day, tamilDate, panchangam, isSunday } = dayData;
                                     const isSelected = selectedDate?.day === day;
-                                    const isToday = todayYear === 2026 && todayMonth === currentMonth && todayDay === day;
+                                    const isToday = todayYear === currentYear && todayMonth === currentMonth && todayDay === day;
 
                                     return (
                                         <button
@@ -298,7 +435,7 @@ const MonthCalendar = ({ onShowCredits, onShowEssentials, currentMonth, setCurre
 
                                             {/* Thithi - small text */}
                                             <span className="text-[4px] sm:text-[6px] text-purple-600 block truncate">
-                                                {panchangam.tithi}
+                                                {panchangam.tithiShort || panchangam.tithi}
                                             </span>
 
 
@@ -322,10 +459,10 @@ const MonthCalendar = ({ onShowCredits, onShowEssentials, currentMonth, setCurre
 
 
                                             {/* Moon phase indicators */}
-                                            {(panchangam.tithi === "அமாவாசை" || (panchangam.events && panchangam.events.includes("அமாவாசை"))) && (
+                                            {(panchangam.tithi === "அமாவாசை" || panchangam.tithiShort?.includes("அமாவாசை") || (panchangam.events && panchangam.events.includes("அமாவாசை"))) && (
                                                 <span className="absolute bottom-1 left-1 w-3 h-3 sm:w-4 sm:h-4 rounded-full bg-black border border-gray-400" title="அமாவாசை"></span>
                                             )}
-                                            {(panchangam.tithi === "பௌர்ணமி" || (panchangam.events && panchangam.events.includes("பௌர்ணமி"))) && (
+                                            {(panchangam.tithi === "பௌர்ணமி" || panchangam.tithiShort?.includes("பௌர்ணமி") || (panchangam.events && panchangam.events.includes("பௌர்ணமி"))) && (
                                                 <span className="absolute bottom-1 left-1 w-3 h-3 sm:w-4 sm:h-4 rounded-full bg-white border border-gray-400" title="பௌர்ணமி"></span>
                                             )}
 
@@ -340,7 +477,7 @@ const MonthCalendar = ({ onShowCredits, onShowEssentials, currentMonth, setCurre
                                             )}
 
                                             {/* Right image in cell */}
-                                            {(panchangam.gridImage || panchangam.image) && (
+                                            {(panchangam.gridImage || (!panchangam.leftImage && panchangam.image)) && (
                                                 <img
                                                     src={panchangam.gridImage || panchangam.image}
                                                     alt="Event"
